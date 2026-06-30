@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Smart Plug Control</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/5.3.4/mqtt.min.js"></script>
+<style>
+  :root {
+    --bg: #0f1115;
+    --card: #181b21;
+    --border: #262a33;
+    --text: #e8eaed;
+    --muted: #8b93a1;
+    --on: #2ecc71;
+    --off: #4a4f5c;
+    --danger: #e74c3c;
+    --accent: #3b82f6;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 24px 16px 60px;
+  }
+  .header {
+    width: 100%;
+    max-width: 420px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+  }
+  .title { font-size: 20px; font-weight: 600; }
+  .status-pill {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border-radius: 999px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    font-size: 13px;
+    font-weight: 500;
+  }
+  .dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--danger);
+    transition: background 0.3s;
+  }
+  .dot.online {
+    background: var(--on);
+    box-shadow: 0 0 8px var(--on);
+  }
+  .refresh-btn {
+    width: 34px; height: 34px;
+    border-radius: 50%;
+    border: 1px solid var(--border);
+    background: var(--card);
+    color: var(--muted);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 16px;
+    transition: transform 0.4s, color 0.2s;
+  }
+  .refresh-btn:active { transform: rotate(180deg); color: var(--accent); }
+  .refresh-btn:disabled { opacity: 0.4; cursor: default; }
+  .header-right { display: flex; align-items: center; gap: 8px; }
+  .config-card {
+    width: 100%;
+    max-width: 420px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 16px;
+    margin-bottom: 16px;
+  }
+  .config-card.hidden { display: none; }
+  .config-card label {
+    display: block;
+    font-size: 12px;
+    color: var(--muted);
+    margin: 10px 0 4px;
+  }
+  .config-card input {
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: #11141a;
+    color: var(--text);
+    font-size: 14px;
+  }
+  .config-card .row2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+  .connect-btn {
+    width: 100%;
+    margin-top: 14px;
+    padding: 12px;
+    border: none;
+    border-radius: 10px;
+    background: var(--accent);
+    color: white;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .connect-btn:active { opacity: 0.8; }
+  .connect-btn:disabled { opacity: 0.5; cursor: default; }
+
+  .rssi-card {
+    width: 100%;
+    max-width: 420px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 14px 18px;
+    margin-bottom: 16px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .rssi-bars {
+    display: flex;
+    align-items: flex-end;
+    gap: 3px;
+    height: 16px;
+  }
+  .rssi-bars div {
+    width: 4px;
+    background: var(--border);
+    border-radius: 2px;
+  }
+  .rssi-bars div:nth-child(1) { height: 25%; }
+  .rssi-bars div:nth-child(2) { height: 50%; }
+  .rssi-bars div:nth-child(3) { height: 75%; }
+  .rssi-bars div:nth-child(4) { height: 100%; }
+  .rssi-bars div.active { background: var(--on); }
+
+  .relays {
+    width: 100%;
+    max-width: 420px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .relay-card {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 18px 20px;
+    transition: opacity 0.2s;
+  }
+  .relay-card.disabled { opacity: 0.45; pointer-events: none; }
+  .relay-info { display: flex; flex-direction: column; gap: 2px; }
+  .relay-name { font-size: 16px; font-weight: 600; }
+  .relay-state { font-size: 12px; color: var(--muted); }
+
+  .switch {
+    position: relative;
+    width: 52px;
+    height: 30px;
+    cursor: pointer;
+  }
+  .switch input { opacity: 0; width: 0; height: 0; }
+  .slider {
+    position: absolute;
+    inset: 0;
+    background: var(--off);
+    border-radius: 999px;
+    transition: background 0.25s;
+  }
+  .slider::before {
+    content: "";
+    position: absolute;
+    width: 24px; height: 24px;
+    left: 3px; top: 3px;
+    background: white;
+    border-radius: 50%;
+    transition: transform 0.25s;
+  }
+  input:checked + .slider { background: var(--on); }
+  input:checked + .slider::before { transform: translateX(22px); }
+
+  .log {
+    width: 100%;
+    max-width: 420px;
+    margin-top: 20px;
+    font-size: 11px;
+    color: var(--muted);
+    text-align: center;
+    min-height: 16px;
+  }
+  .footer-link {
+    margin-top: 24px;
+    font-size: 12px;
+    color: var(--muted);
+    text-decoration: underline;
+    cursor: pointer;
+  }
+</style>
+</head>
+<body>
+
+  <div class="header">
+    <div class="title">Smart Plug</div>
+    <div class="header-right">
+      <button class="refresh-btn" id="refreshBtn" title="Refresh status">&#x21bb;</button>
+      <div class="status-pill">
+        <div class="dot" id="statusDot"></div>
+        <span id="statusText">Offline</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Connection config -->
+  <div class="config-card" id="configCard">
+    <label>HiveMQ Cluster Host</label>
+    <input type="text" id="brokerHost" placeholder="xxxxxxx.s1.eu.hivemq.cloud" />
+
+    <div class="row2">
+      <div>
+        <label>WebSocket Port</label>
+        <input type="text" id="brokerPort" value="8884" />
+      </div>
+      <div>
+        <label>Client ID</label>
+        <input type="text" id="clientId" value="webapp_001" />
+      </div>
+    </div>
+
+    <div class="row2">
+      <div>
+        <label>Username</label>
+        <input type="text" id="mqttUser" placeholder="your_username" />
+      </div>
+      <div>
+        <label>Password</label>
+        <input type="password" id="mqttPass" placeholder="your_password" />
+      </div>
+    </div>
+
+    <button class="connect-btn" id="connectBtn">Connect</button>
+  </div>
+
+  <!-- RSSI -->
+  <div class="rssi-card">
+    <span>Signal Strength</span>
+    <div style="display:flex; align-items:center; gap:8px;">
+      <span id="rssiValue">— dBm</span>
+      <div class="rssi-bars" id="rssiBars">
+        <div></div><div></div><div></div><div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Relays -->
+  <div class="relays">
+    <div class="relay-card disabled" id="relayCard1">
+      <div class="relay-info">
+        <div class="relay-name">Relay 1</div>
+        <div class="relay-state" id="relayState1">Unknown</div>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="relayToggle1" data-relay="0">
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <div class="relay-card disabled" id="relayCard2">
+      <div class="relay-info">
+        <div class="relay-name">Relay 2</div>
+        <div class="relay-state" id="relayState2">Unknown</div>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="relayToggle2" data-relay="1">
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <div class="relay-card disabled" id="relayCard3">
+      <div class="relay-info">
+        <div class="relay-name">Relay 3</div>
+        <div class="relay-state" id="relayState3">Unknown</div>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="relayToggle3" data-relay="2">
+        <span class="slider"></span>
+      </label>
+    </div>
+  </div>
+
+  <div class="log" id="logLine"></div>
+  <div class="footer-link" id="toggleConfigLink">Hide connection settings</div>
+
+<script>
+/* ============================================================
+   Smart Plug — MQTT over WebSockets (HiveMQ Cloud)
+   Binary protocol matching the ESP32-C3 firmware:
+
+   PUBLISH  smartplug/cmd     (device subscribes)
+     1 byte:  bit7=1 (cmd flag)  bit2=relay3  bit1=relay2  bit0=relay1
+     e.g. 0x87 = all ON,  0x80 = all OFF,  0x83 = relay1+2 ON, relay3 OFF
+
+   SUBSCRIBE smartplug/state  (device publishes on every change + heartbeat)
+     2 bytes: [0]=relay bitfield   [1]=RSSI+128
+
+   SUBSCRIBE smartplug/status (device publishes — LWT)
+     1 byte:  0x31='1'=online   0x30='0'=offline
+     (ASCII digits, NOT raw 0x01/0x00 — PubSubClient's connect() LWT
+      parameter is a C-string measured with strlen(), so a raw 0x00
+      byte is indistinguishable from an empty string and gets dropped.
+      The firmware sends ASCII '1'/'0' instead so the LWT always
+      carries a real, non-empty byte.)
+   ============================================================ */
+
+const TOPIC_CMD    = "smartplug/cmd";
+const TOPIC_QUERY  = "smartplug/query";   // publish anything here to request fresh state
+const TOPIC_STATE  = "smartplug/state";
+const TOPIC_STATUS = "smartplug/status";
+
+const CMD_FLAG_RELAY = 0x80;
+const RELAY_BITS     = [0x01, 0x02, 0x04]; // relay1, relay2, relay3
+
+let mqttClient = null;
+let currentRelayByte = 0x00;   // last known relay bitfield from device
+let isOnline = false;
+
+const el = {
+  statusDot:    document.getElementById('statusDot'),
+  statusText:   document.getElementById('statusText'),
+  connectBtn:   document.getElementById('connectBtn'),
+  configCard:   document.getElementById('configCard'),
+  toggleLink:   document.getElementById('toggleConfigLink'),
+  rssiValue:    document.getElementById('rssiValue'),
+  rssiBars:     document.getElementById('rssiBars').children,
+  logLine:      document.getElementById('logLine'),
+  relayCards:   [
+    document.getElementById('relayCard1'),
+    document.getElementById('relayCard2'),
+    document.getElementById('relayCard3'),
+  ],
+  relayStates:  [
+    document.getElementById('relayState1'),
+    document.getElementById('relayState2'),
+    document.getElementById('relayState3'),
+  ],
+  relayToggles: [
+    document.getElementById('relayToggle1'),
+    document.getElementById('relayToggle2'),
+    document.getElementById('relayToggle3'),
+  ],
+};
+
+function log(msg) {
+  el.logLine.textContent = msg;
+  console.log('[SmartPlug]', msg);
+}
+
+function setOnlineUI(online) {
+  isOnline = online;
+  el.statusDot.classList.toggle('online', online);
+  el.statusText.textContent = online ? 'Online' : 'Offline';
+  el.relayCards.forEach(c => c.classList.toggle('disabled', !online));
+  if (!online) {
+    el.rssiValue.textContent = '— dBm';
+    Array.from(el.rssiBars).forEach(b => b.classList.remove('active'));
+  }
+}
+
+function setRelayUI(index, isOn) {
+  el.relayToggles[index].checked = isOn;
+  el.relayStates[index].textContent = isOn ? 'ON' : 'OFF';
+}
+
+function applyRelayByte(byte) {
+  currentRelayByte = byte;
+  for (let i = 0; i < 3; i++) {
+    setRelayUI(i, (byte & RELAY_BITS[i]) !== 0);
+  }
+}
+
+function applyRssiByte(byte) {
+  const dBm = byte - 128;
+  el.rssiValue.textContent = dBm + ' dBm';
+
+  // Map dBm to 0-4 bars
+  let bars = 0;
+  if (dBm > -50) bars = 4;
+  else if (dBm > -60) bars = 3;
+  else if (dBm > -70) bars = 2;
+  else if (dBm > -85) bars = 1;
+  else bars = 0;
+
+  Array.from(el.rssiBars).forEach((bar, i) => {
+    bar.classList.toggle('active', i < bars);
+  });
+}
+
+/* ---- Connect ---- */
+function connect() {
+  const host = document.getElementById('brokerHost').value.trim();
+  const port = document.getElementById('brokerPort').value.trim();
+  const clientId = document.getElementById('clientId').value.trim() || ('webapp_' + Math.random().toString(16).slice(2, 8));
+  const username = document.getElementById('mqttUser').value;
+  const password = document.getElementById('mqttPass').value;
+
+  if (!host) {
+    log('Enter your HiveMQ cluster host first.');
+    return;
+  }
+
+  el.connectBtn.disabled = true;
+  el.connectBtn.textContent = 'Connecting…';
+  log('Connecting to ' + host + ':' + port + ' …');
+
+  // mqtt.js over WebSocket + TLS: wss://host:port/mqtt
+  const url = `wss://${host}:${port}/mqtt`;
+
+  mqttClient = mqtt.connect(url, {
+    clientId: clientId,
+    username: username,
+    password: password,
+    clean: true,
+    reconnectPeriod: 3000,
+    connectTimeout: 8000,
+  });
+
+  mqttClient.on('connect', () => {
+    log('Connected to broker — subscribing…');
+    mqttClient.subscribe(TOPIC_STATE,  { qos: 1 });
+    mqttClient.subscribe(TOPIC_STATUS, { qos: 1 });
+    el.connectBtn.textContent = 'Connected';
+    saveConfig();
+
+    // No periodic heartbeat from the device anymore — ask for state
+    // explicitly the moment we connect so the UI populates immediately.
+    requestState();
+  });
+
+  mqttClient.on('reconnect', () => {
+    log('Reconnecting…');
+  });
+
+  mqttClient.on('close', () => {
+    setOnlineUI(false);
+    el.connectBtn.disabled = false;
+    el.connectBtn.textContent = 'Connect';
+  });
+
+  mqttClient.on('error', (err) => {
+    log('Connection error: ' + err.message);
+    el.connectBtn.disabled = false;
+    el.connectBtn.textContent = 'Connect';
+  });
+
+  mqttClient.on('message', (topic, payload) => {
+    if (topic === TOPIC_STATE && payload.length >= 2) {
+      applyRelayByte(payload[0]);
+      applyRssiByte(payload[1]);
+    } else if (topic === TOPIC_STATUS) {
+      // Online = ASCII '1' (0x31). Treat anything else — including an
+      // empty/zero-length payload — as offline, as a safety net.
+      const online = payload.length >= 1 && payload[0] === 0x31;
+      setOnlineUI(online);
+      log(online ? 'Device online' : 'Device offline');
+    }
+  });
+}
+
+/* ---- Request fresh state on demand ----
+ * Publishes any payload to smartplug/query. The device replies once
+ * on smartplug/state — there is no periodic heartbeat, so this is
+ * called on connect and whenever the user taps the refresh icon.
+ */
+function requestState() {
+  if (!mqttClient || !mqttClient.connected) {
+    log('Not connected — cannot request state.');
+    return;
+  }
+  mqttClient.publish(TOPIC_QUERY, new Uint8Array([0x01]), { qos: 1 });
+  log('Requested current state…');
+}
+
+/* ---- Send relay command ---- */
+function sendRelayCommand(index, turnOn) {
+  if (!mqttClient || !mqttClient.connected) {
+    log('Not connected to broker.');
+    return;
+  }
+
+  // Start from last known state, flip the target bit, keep others unchanged
+  let newByte = currentRelayByte;
+  if (turnOn) newByte |= RELAY_BITS[index];
+  else        newByte &= ~RELAY_BITS[index];
+  newByte |= CMD_FLAG_RELAY;   // set command flag bit7
+
+  const payload = new Uint8Array([newByte & 0xFF]);
+  mqttClient.publish(TOPIC_CMD, payload, { qos: 1 });
+  log(`Sent cmd 0x${newByte.toString(16).padStart(2,'0')} → relay${index+1} ${turnOn ? 'ON' : 'OFF'}`);
+}
+
+/* ---- Wire up toggle switches ---- */
+el.relayToggles.forEach((toggle, index) => {
+  toggle.addEventListener('change', (e) => {
+    sendRelayCommand(index, e.target.checked);
+  });
+});
+
+el.connectBtn.addEventListener('click', connect);
+
+document.getElementById('refreshBtn').addEventListener('click', requestState);
+
+el.toggleLink.addEventListener('click', () => {
+  const hidden = el.configCard.classList.toggle('hidden');
+  el.toggleLink.textContent = hidden ? 'Show connection settings' : 'Hide connection settings';
+});
+
+/* ---- Persist connection settings locally (not credentials by default) ---- */
+function saveConfig() {
+  const cfg = {
+    host: document.getElementById('brokerHost').value,
+    port: document.getElementById('brokerPort').value,
+    clientId: document.getElementById('clientId').value,
+  };
+  try {
+    window.name = 'smartplug_cfg:' + JSON.stringify(cfg);
+  } catch (e) { /* ignore */ }
+}
+
+function loadConfig() {
+  try {
+    if (window.name && window.name.startsWith('smartplug_cfg:')) {
+      const cfg = JSON.parse(window.name.slice('smartplug_cfg:'.length));
+      if (cfg.host) document.getElementById('brokerHost').value = cfg.host;
+      if (cfg.port) document.getElementById('brokerPort').value = cfg.port;
+      if (cfg.clientId) document.getElementById('clientId').value = cfg.clientId;
+    }
+  } catch (e) { /* ignore */ }
+}
+
+loadConfig();
+setOnlineUI(false);
+</script>
+
+</body>
+</html>
